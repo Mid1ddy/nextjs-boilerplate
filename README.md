@@ -1,13 +1,13 @@
 <div align="center">
 
-# Next.js Boilerplate
+# BUBBLE BATTLE
 
-**Современный стартовый шаблон веб-приложения: Next.js 16, React 19, TypeScript, Tailwind CSS 4**
+**Мультяшная онлайн-выживалка в стиле .io: королевская битва на Next.js**
 
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![socket.io](https://img.shields.io/badge/socket.io-4-white?logo=socketdotio&logoColor=black)](https://socket.io)
+[![Prisma](https://img.shields.io/badge/Prisma-SQLite-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
 **Русский** · [English](./README.en.md)
@@ -18,76 +18,110 @@
 
 ## О проекте
 
-Минимальный, но полностью настроенный стартовый шаблон для веб-приложений на Next.js с App Router. Проект создан через `create-next-app` и работает «из коробки»: типизация на TypeScript, утилитарные стили на Tailwind CSS 4, оптимизированные шрифты Geist и аккуратная структура папок для быстрого старта новых проектов.
+Онлайн-игра «королевская битва» (по мотивам surviv.io): игроки сходятся на карте, стреляют друг в друга, собирают лут из ящиков и стараются остаться последним выжившим, пока шторм сужает арену. Полностью авторитетный сервер на socket.io, рендер на HTML5 Canvas, таблица лидеров в SQLite через Prisma.
 
-## Возможности
+- **Только реальные игроки** — ботов нет, для матча нужно минимум 2 человека
+- **Раунды автоматические**: лобби → отсчёт 5 секунд → бой → результаты → новое лобби
+- **Шторм (зона)** сужается фазами и наносит всё больший урон вне безопасного круга
+- **Лут**: ящики с автоматом, дробовиком, снайперкой или аптечкой
+- **Кроссплатформенно**: WASD + мышь на компьютере, два виртуальных стика на телефоне
 
-- **App Router** — современный роутинг Next.js с серверными компонентами
-- **TypeScript 5** — статическая типизация из коробки
-- **Tailwind CSS 4** — утилитарные стили через PostCSS-плагин, без отдельного конфига
-- **Шрифты Geist** — автоматическая оптимизация через `next/font`
-- **ESLint 9** — flat config с правилами `eslint-config-next`
-- **Тёмная тема** — базовые стили и цветовые переменные уже настроены
+## Как играть
 
-## Быстрый старт
+| Действие | Компьютер | Телефон |
+| --- | --- | --- |
+| Движение | WASD или стрелки | левый стик |
+| Прицел | мышь | правый стик |
+| Стрельба | ЛКМ (удерживать) | наклон правого стика |
+
+Ящик открывается касанием. Победа — остаться последним живым.
+
+## Запуск
 
 Понадобятся **Node.js 20.9+** и npm.
 
 ```bash
-# 1. Клонировать репозиторий
+# 1. Клонировать репозиторий и установить зависимости
 git clone https://github.com/Mid1ddy/nextjs-boilerplate.git
 cd nextjs-boilerplate
-
-# 2. Установить зависимости
 npm install
 
-# 3. Запустить сервер разработки
+# 2. Создать .env (или скопировать .env.example)
+#    Windows (PowerShell): Copy-Item .env.example .env
+cp .env.example .env
+
+# 3. Создать базу данных (SQLite)
+npm run db:push
+
+# 4. Запустить игру (Next.js + socket.io в одном процессе)
 npm run dev
 ```
 
-Открой [http://localhost:3000](http://localhost:3000) в браузере. Страница автоматически обновляется при редактировании `app/page.tsx`.
+Открой [http://localhost:3000](http://localhost:3000), введи ник и нажми «Играть». Для старта раунда нужно минимум 2 игрока — открой вторую вкладку или позови друга (сервер доступен по IP твоей машины в локальной сети).
+
+Продакшен-сборка: `npm run build`, затем `npm start`.
 
 ## Скрипты
 
 | Команда | Описание |
 | --- | --- |
-| `npm run dev` | Сервер разработки на `localhost:3000` |
-| `npm run build` | Продакшен-сборка |
-| `npm run start` | Запуск продакшен-сборки |
+| `npm run dev` | Сервер разработки (Next.js + socket.io) |
+| `npm run build` | Продакшен-сборка Next.js |
+| `npm start` | Запуск продакшен-версии |
 | `npm run lint` | Проверка кода ESLint |
+| `npm run db:push` | Применить схему Prisma к SQLite |
+
+## Как устроен мультиплеер
+
+- `server/index.ts` — custom server: HTTP-сервер держит и Next.js, и WebSocket (socket.io, путь `/socket.io`)
+- `lib/game/engine.ts` — авторитетная симуляция: мир, движение, коллизии, пули, ящики, зоны шторма, фазы раунда (50 Гц)
+- `lib/game/wiring.ts` — общая привязка socket.io: события `join` / `input` / `state` и рассылка снапшотов 20 раз в секунду
+- `components/game/GameCanvas.tsx` — клиент: canvas-рендер, ввод с клавиатуры/мыши/тача, HUD
+- `lib/db.ts` + `prisma/schema.prisma` — таблица `Player`: победы, убийства, раунды. После каждого раунда результаты сохраняются на сервере, меню читает их через API-роут `/api/leaderboard`
 
 ## Структура проекта
 
 ```text
 nextjs-boilerplate/
+├── server/
+│   └── index.ts          # custom server: Next.js + socket.io
 ├── app/
-│   ├── favicon.ico       # иконка сайта
+│   ├── favicon.ico
 │   ├── globals.css       # глобальные стили (Tailwind CSS 4)
 │   ├── layout.tsx        # корневой layout: шрифты и метаданные
-│   └── page.tsx          # главная страница
-├── public/               # статические файлы (svg-иконки)
+│   ├── page.tsx          # меню: ник, таблица лидеров, вход в игру
+│   └── api/
+│       └── leaderboard/  # GET — топ-10 игроков
+├── components/
+│   └── game/
+│       └── GameCanvas.tsx # игровой клиент: canvas, ввод, HUD
+├── lib/
+│   ├── db.ts             # Prisma Client
+│   └── game/
+│       ├── shared.ts     # общие константы и типы
+│       ├── engine.ts     # игровая логика (сервер)
+│       ├── wiring.ts     # привязка socket.io
+│       └── socket.ts     # фабрика сокета (клиент)
+├── prisma/
+│   └── schema.prisma     # модель Player (SQLite)
 ├── AGENTS.md             # правила для AI-агентов
 ├── CLAUDE.md             # правила для Claude Code
-├── eslint.config.mjs     # конфигурация ESLint 9 (flat config)
-├── next.config.ts        # конфигурация Next.js
-├── postcss.config.mjs    # конфигурация PostCSS (плагин Tailwind)
-├── package.json          # зависимости и скрипты
-└── tsconfig.json         # конфигурация TypeScript
+└── package.json
 ```
-
-## Для AI-ассистентов
-
-Файлы `AGENTS.md` и `CLAUDE.md` содержат правила для AI-редакторов кода (Cursor, Copilot, Claude Code и других): Next.js 16 отличается от предыдущих версий, поэтому перед написанием кода ассистенту предлагается сверяться с документацией в `node_modules/next/dist/docs/`.
 
 ## Деплой
 
-Проще всего развернуть приложение на [Vercel](https://vercel.com/new) — платформе от создателей Next.js:
+Игра использует WebSocket и постоянный Node-процесс, поэтому классический serverless-хостинг (Vercel Functions) не подойдёт. Варианты: **Railway**, **Render**, **Fly.io** или свой VPS — команды `npm run build` + `npm start`, порт задаётся переменной `PORT`.
 
-1. Импортируй репозиторий в Vercel
-2. Настройки сборки определятся автоматически
-3. Нажми **Deploy**
+## Технологии
 
-Подробности — в [документации по деплою Next.js](https://nextjs.org/docs/app/getting-started/deploying).
+| Слой | Технология |
+| --- | --- |
+| Фреймворк | Next.js 16 (App Router), React 19, TypeScript 5 |
+| Реалтайм | socket.io 4 (custom server) |
+| Рендер | HTML5 Canvas 2D |
+| Стили | Tailwind CSS 4 |
+| База | SQLite + Prisma 6 |
 
 ## Лицензия
 

@@ -1,13 +1,13 @@
 <div align="center">
 
-# Next.js Boilerplate
+# BUBBLE BATTLE
 
-**A modern web app starter: Next.js 16, React 19, TypeScript, Tailwind CSS 4**
+**A cartoon online .io-style battle royale built with Next.js**
 
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![socket.io](https://img.shields.io/badge/socket.io-4-white?logo=socketdotio&logoColor=black)](https://socket.io)
+[![Prisma](https://img.shields.io/badge/Prisma-SQLite-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
 [Русский](./README.md) · **English**
@@ -18,76 +18,109 @@
 
 ## About
 
-A minimal yet fully configured starter template for Next.js web applications with the App Router. The project was bootstrapped with `create-next-app` and works out of the box: TypeScript typing, Tailwind CSS 4 utility styles via a PostCSS plugin, optimized Geist fonts, and a clean folder structure for quickly starting new projects.
+An online battle royale game (inspired by surviv.io): players meet on a map, shoot each other, grab loot from crates and try to stay the last one standing while the storm shrinks the arena. Fully authoritative socket.io server, HTML5 Canvas rendering, and a SQLite leaderboard powered by Prisma.
 
-## Features
+- **Real players only** — no bots, a match needs at least 2 humans
+- **Automatic rounds**: lobby → 5-second countdown → fight → results → new lobby
+- **Storm (zone)** shrinks in phases and deals growing damage outside the safe circle
+- **Loot**: crates with an SMG, shotgun, sniper rifle or a medkit
+- **Cross-platform**: WASD + mouse on desktop, two virtual sticks on mobile
 
-- **App Router** — modern Next.js routing with server components
-- **TypeScript 5** — static typing out of the box
-- **Tailwind CSS 4** — utility-first styling through a PostCSS plugin, no extra config
-- **Geist fonts** — automatic optimization via `next/font`
-- **ESLint 9** — flat config with `eslint-config-next` rules
-- **Dark theme** — base styles and color variables are already set up
+## How to Play
+
+| Action | Desktop | Mobile |
+| --- | --- | --- |
+| Move | WASD or arrows | left stick |
+| Aim | mouse | right stick |
+| Shoot | LMB (hold) | tilt the right stick |
+
+Touch a crate to open it. Be the last player alive to win.
 
 ## Getting Started
 
 You will need **Node.js 20.9+** and npm.
 
 ```bash
-# 1. Clone the repository
+# 1. Clone the repository and install dependencies
 git clone https://github.com/Mid1ddy/nextjs-boilerplate.git
 cd nextjs-boilerplate
-
-# 2. Install dependencies
 npm install
 
-# 3. Start the dev server
+# 2. Create .env (or copy .env.example)
+cp .env.example .env
+
+# 3. Create the database (SQLite)
+npm run db:push
+
+# 4. Run the game (Next.js + socket.io in one process)
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser. The page auto-updates as you edit `app/page.tsx`.
+Open [http://localhost:3000](http://localhost:3000), enter a nickname and press Play. A round needs at least 2 players — open a second tab or invite a friend (the server is reachable by your machine's IP on the LAN).
+
+Production build: `npm run build`, then `npm start`.
 
 ## Scripts
 
 | Command | Description |
 | --- | --- |
-| `npm run dev` | Development server on `localhost:3000` |
+| `npm run dev` | Development server (Next.js + socket.io) |
 | `npm run build` | Production build |
-| `npm run start` | Run the production build |
-| `npm run lint` | Run ESLint checks |
+| `npm start` | Run the production version |
+| `npm run lint` | Run ESLint |
+| `npm run db:push` | Apply the Prisma schema to SQLite |
+
+## How the Multiplayer Works
+
+- `server/index.ts` — custom server: one HTTP server hosts both Next.js and WebSocket (socket.io, path `/socket.io`)
+- `lib/game/engine.ts` — authoritative simulation: world, movement, collisions, bullets, crates, storm zones and round phases (50 Hz)
+- `lib/game/wiring.ts` — shared socket.io wiring: `join` / `input` / `state` events and snapshot broadcasts 20 times per second
+- `components/game/GameCanvas.tsx` — client: canvas rendering, keyboard/mouse/touch input, HUD
+- `lib/db.ts` + `prisma/schema.prisma` — the `Player` table: wins, kills, rounds. Round results are saved on the server, and the menu reads them via the `/api/leaderboard` API route
 
 ## Project Structure
 
 ```text
 nextjs-boilerplate/
+├── server/
+│   └── index.ts          # custom server: Next.js + socket.io
 ├── app/
-│   ├── favicon.ico       # site favicon
+│   ├── favicon.ico
 │   ├── globals.css       # global styles (Tailwind CSS 4)
 │   ├── layout.tsx        # root layout: fonts and metadata
-│   └── page.tsx          # home page
-├── public/               # static assets (svg icons)
+│   ├── page.tsx          # menu: nickname, leaderboard, play
+│   └── api/
+│       └── leaderboard/  # GET — top-10 players
+├── components/
+│   └── game/
+│       └── GameCanvas.tsx # game client: canvas, input, HUD
+├── lib/
+│   ├── db.ts             # Prisma Client
+│   └── game/
+│       ├── shared.ts     # shared constants and types
+│       ├── engine.ts     # game logic (server)
+│       ├── wiring.ts     # socket.io wiring
+│       └── socket.ts     # socket factory (client)
+├── prisma/
+│   └── schema.prisma     # Player model (SQLite)
 ├── AGENTS.md             # rules for AI agents
 ├── CLAUDE.md             # rules for Claude Code
-├── eslint.config.mjs     # ESLint 9 configuration (flat config)
-├── next.config.ts        # Next.js configuration
-├── postcss.config.mjs    # PostCSS configuration (Tailwind plugin)
-├── package.json          # dependencies and scripts
-└── tsconfig.json         # TypeScript configuration
+└── package.json
 ```
-
-## For AI Assistants
-
-The `AGENTS.md` and `CLAUDE.md` files contain rules for AI coding assistants (Cursor, Copilot, Claude Code, etc.): Next.js 16 differs from previous versions, so assistants are asked to consult the documentation in `node_modules/next/dist/docs/` before writing code.
 
 ## Deployment
 
-The easiest way to deploy the app is on [Vercel](https://vercel.com/new), the platform from the creators of Next.js:
+The game uses WebSockets and a persistent Node process, so classic serverless hosting (Vercel Functions) will not work. Options: **Railway**, **Render**, **Fly.io** or your own VPS — run `npm run build` + `npm start`, the port is set via the `PORT` variable.
 
-1. Import the repository into Vercel
-2. Build settings are detected automatically
-3. Click **Deploy**
+## Tech Stack
 
-For more details, see the [Next.js deployment documentation](https://nextjs.org/docs/app/getting-started/deploying).
+| Layer | Technology |
+| --- | --- |
+| Framework | Next.js 16 (App Router), React 19, TypeScript 5 |
+| Realtime | socket.io 4 (custom server) |
+| Rendering | HTML5 Canvas 2D |
+| Styling | Tailwind CSS 4 |
+| Database | SQLite + Prisma 6 |
 
 ## License
 
