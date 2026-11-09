@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Next.js Boilerplate",
+  title: "BUBBLE BATTLE — мультяшная выживалка .io",
   description:
-    "A modern web app starter built with Next.js 16, React 19, TypeScript and Tailwind CSS 4",
+    "Онлайн королевская битва на Next.js: собирай лут, стреляй и переживи шторм. Next.js 16, React 19, socket.io, Prisma.",
 };
 
 export default function RootLayout({
