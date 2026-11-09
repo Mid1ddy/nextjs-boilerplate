@@ -46,6 +46,7 @@ interface InternalPlayer {
   kills: number;
   place: number;
   cooldown: number;
+  seq: number; // последний применённый номер пакета ввода
   input: InputPayload;
 }
 
@@ -244,6 +245,7 @@ export class GameWorld {
     p.place = 0;
     p.cooldown = 0;
     p.input = { mx: 0, my: 0, aim: 0, shoot: false };
+    // seq НЕ сбрасываем — счётчик клиента монотонный на всю сессию
   }
 
   join(id: string, name: string): void {
@@ -263,6 +265,7 @@ export class GameWorld {
       kills: 0,
       place: 0,
       cooldown: 0,
+      seq: 0,
       input: { mx: 0, my: 0, aim: 0, shoot: false },
     };
     if (!midRound) this.spawnWarmup(p);
@@ -286,6 +289,9 @@ export class GameWorld {
     p.input.my = clamp(input.my, -1, 1);
     if (Number.isFinite(input.aim)) p.input.aim = input.aim;
     p.input.shoot = !!input.shoot;
+    if (typeof input.seq === "number" && Number.isFinite(input.seq)) {
+      p.seq = Math.max(p.seq, input.seq);
+    }
   }
 
   activeCount(): number {
@@ -643,6 +649,7 @@ export class GameWorld {
         spectator: p.spectator,
         kills: p.kills,
         place: p.place,
+        seq: p.seq,
       });
     }
     const z = this.zone;

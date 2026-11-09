@@ -48,6 +48,7 @@ export function attachGameServer(io: IOServer, opts: GameServerOptions = {}): Ga
         my: Number(data.my) || 0,
         aim: Number(data.aim) || 0,
         shoot: !!data.shoot,
+        seq: typeof data.seq === "number" ? data.seq : undefined,
       });
     });
 

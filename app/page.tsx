@@ -397,9 +397,6 @@ export default function Home() {
           Играть
         </button>
 
-        <p className="mt-5 text-sm text-white/55 text-center">
-          Для раунда нужно два игрока — открой игру во второй вкладке
-        </p>
       </div>
 
       {/* Панель управления (слева) */}

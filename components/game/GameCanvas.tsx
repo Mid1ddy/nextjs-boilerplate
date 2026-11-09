@@ -5,11 +5,14 @@ import { Trophy } from "lucide-react";
 import { createGameSocket } from "@/lib/game/socket";
 import type { Socket } from "socket.io-client";
 import {
+  BULLET_RADIUS,
   LOBBY_MIN_PLAYERS,
   ObstacleState,
   PLAYER_RADIUS,
+  PLAYER_SPEED,
   Snapshot,
   WEAPONS,
+  WeaponId,
   WORLD_SIZE,
 } from "@/lib/game/shared";
 
@@ -37,6 +40,77 @@ function hpColor(pct: number): string {
   return "#F87171";
 }
 
+const INTERP_MS = 50; // период снапшотов сервера
+const INPUT_DT = 0.05; // шаг отправки ввода (сек)
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** Интерполяция угла по короткой дуге */
+function lerpAngle(a: number, b: number, t: number): number {
+  const d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  return a + d * t;
+}
+
+const clampV = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+/** Пересечение отрезка с окружностью — зеркало серверной проверки (для локальных пуль) */
+function segHitsCircle(
+  x1: number, y1: number, x2: number, y2: number,
+  cx: number, cy: number, r: number,
+): boolean {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((cx - x1) * dx + (cy - y1) * dy) / lenSq : 0;
+  t = clampV(t, 0, 1);
+  const px = x1 + dx * t;
+  const py = y1 + dy * t;
+  const ex = px - cx;
+  const ey = py - cy;
+  return ex * ex + ey * ey <= r * r;
+}
+
+/** Один шаг движения игрока — точная копия серверной физики (препятствия + границы) */
+function stepPlayer(
+  x: number, y: number, mx: number, my: number, dt: number,
+  obstacles: ObstacleState[],
+): { x: number; y: number } {
+  let vx = mx;
+  let vy = my;
+  const mag = Math.hypot(vx, vy);
+  if (mag > 1) {
+    vx /= mag;
+    vy /= mag;
+  }
+  x += vx * PLAYER_SPEED * dt;
+  y += vy * PLAYER_SPEED * dt;
+  for (const o of obstacles) {
+    if (o.kind === "bush") continue;
+    const dx = x - o.x;
+    const dy = y - o.y;
+    const d = Math.hypot(dx, dy);
+    const min = o.r + PLAYER_RADIUS;
+    if (d < min && d > 0) {
+      x = o.x + (dx / d) * min;
+      y = o.y + (dy / d) * min;
+    }
+  }
+  x = clampV(x, PLAYER_RADIUS, WORLD_SIZE - PLAYER_RADIUS);
+  y = clampV(y, PLAYER_RADIUS, WORLD_SIZE - PLAYER_RADIUS);
+  return { x, y };
+}
+
+/** Локально предсказанная пуля (рисуется мгновенно, урон считает сервер) */
+interface LocalBullet {
+  id: number;
+  color: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+
 export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState<"connecting" | "online" | "offline">("connecting");
@@ -53,6 +127,18 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
   const moveStickRef = useRef<Stick>(newStick());
   const aimStickRef = useRef<Stick>(newStick());
   const prevPhaseRef = useRef("");
+  const prevSnapRef = useRef<Snapshot | null>(null);
+  const currSnapRef = useRef<Snapshot | null>(null);
+  const recvTimeRef = useRef(0);
+  const lastFrameRef = useRef(0);
+  const camRef = useRef({ x: WORLD_SIZE / 2, y: WORLD_SIZE / 2, init: false });
+  const predRef = useRef({ x: WORLD_SIZE / 2, y: WORLD_SIZE / 2, init: false });
+  const pendingRef = useRef<{ seq: number; mx: number; my: number }[]>([]);
+  const localBulletsRef = useRef<LocalBullet[]>([]);
+  const localIdRef = useRef(1);
+  const cooldownRef = useRef(0);
+  const weaponRef = useRef<WeaponId>("pistol");
+  const wasAliveRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -60,6 +146,7 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    let seq = 0; // номер пакета ввода (для серверной реконсиляции)
     const socket = createGameSocket();
     socketRef.current = socket;
 
@@ -75,12 +162,63 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
       setMeId(data.id);
       obstaclesRef.current = data.obstacles || [];
       setMeName(data.name);
+      // Полный сброс предсказания при входе/переподключении
+      predRef.current = { x: WORLD_SIZE / 2, y: WORLD_SIZE / 2, init: false };
+      camRef.current.init = false;
+      pendingRef.current = [];
+      localBulletsRef.current = [];
+      cooldownRef.current = 0;
+      weaponRef.current = "pistol";
+      wasAliveRef.current = false;
+      seq = 0;
     });
 
     socket.on("state", (s: Snapshot) => {
       const prev = prevPhaseRef.current;
       if (prev === "playing" && s.phase === "results") onStatsChanged();
       prevPhaseRef.current = s.phase;
+      if (s.phase === "lobby" && prev !== "lobby") predRef.current.init = false;
+      prevSnapRef.current = currSnapRef.current;
+      currSnapRef.current = s;
+      recvTimeRef.current = performance.now();
+
+      // --- Реконсиляция: серверная позиция + реплей неподтверждённого ввода ---
+      const me = s.players.find((p) => p.id === meIdRef.current) ?? null;
+      if (me && me.alive && !me.spectator) {
+        const srvSeq = me.seq || 0;
+        while (pendingRef.current.length && pendingRef.current[0].seq <= srvSeq) {
+          pendingRef.current.shift();
+        }
+        let px = me.x;
+        let py = me.y;
+        for (const inp of pendingRef.current) {
+          const r = stepPlayer(px, py, inp.mx, inp.my, INPUT_DT, obstaclesRef.current);
+          px = r.x;
+          py = r.y;
+        }
+        if (!predRef.current.init || !wasAliveRef.current) {
+          predRef.current.x = px;
+          predRef.current.y = py;
+          predRef.current.init = true;
+        } else {
+          const err = Math.hypot(px - predRef.current.x, py - predRef.current.y);
+          if (err > 80) {
+            predRef.current.x = px;
+            predRef.current.y = py;
+          }
+        }
+        wasAliveRef.current = true;
+      } else {
+        wasAliveRef.current = false;
+        localBulletsRef.current = [];
+      }
+      // Смена оружия — мгновенная готовность выстрела
+      if (me && me.weapon !== weaponRef.current) {
+        weaponRef.current = me.weapon;
+        cooldownRef.current = 0;
+      }
+      if (s.phase !== "playing") localBulletsRef.current = [];
+
       stateRef.current = s;
       setSnap(s);
     });
@@ -186,8 +324,8 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
     resize();
     window.addEventListener("resize", resize);
 
-    // ----- Отправка ввода 20 раз в секунду -----
-    const sendInput = () => {
+    // ----- Отправка ввода 20 раз в секунду (с номером пакета) -----
+    const readInput = () => {
       const s = stateRef.current;
       const me = s?.players.find((p) => p.id === meIdRef.current) ?? null;
       const k = keysRef.current;
@@ -208,13 +346,23 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
         const mag = Math.hypot(st.dx, st.dy);
         if (mag > 10) aim = Math.atan2(st.dy, st.dx);
         shoot = mag > 18;
-      } else if (mouseRef.current.seen && me) {
-        const wx = me.x + (mouseRef.current.x - window.innerWidth / 2);
-        const wy = me.y + (mouseRef.current.y - window.innerHeight / 2);
-        aim = Math.atan2(wy - me.y, wx - me.x);
+      } else if (mouseRef.current.seen) {
+        // Прицел считается от предсказанной позиции — без рывков при движении
+        const bx = predRef.current.init ? predRef.current.x : me ? me.x : 0;
+        const by = predRef.current.init ? predRef.current.y : me ? me.y : 0;
+        const wx = bx + (mouseRef.current.x - window.innerWidth / 2);
+        const wy = by + (mouseRef.current.y - window.innerHeight / 2);
+        aim = Math.atan2(wy - by, wx - bx);
         shoot = mouseRef.current.down;
       }
-      socket.emit("input", { mx, my, aim, shoot });
+      return { mx, my, aim, shoot };
+    };
+    const sendInput = () => {
+      const inp = readInput();
+      seq++;
+      socket.emit("input", { seq, mx: inp.mx, my: inp.my, aim: inp.aim, shoot: inp.shoot });
+      pendingRef.current.push({ seq, mx: inp.mx, my: inp.my });
+      if (pendingRef.current.length > 40) pendingRef.current.shift();
     };
     const sender = setInterval(sendInput, 50);
 
@@ -237,8 +385,120 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
       }
 
       const me = s.players.find((p) => p.id === meIdRef.current) ?? null;
-      const camX = me ? me.x : s.zone.x;
-      const camY = me ? me.y : s.zone.y;
+
+      // --- Время кадра ---
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - (lastFrameRef.current || now)) / 1000);
+      lastFrameRef.current = now;
+
+      // --- Клиентское предсказание своего движения (мгновенная реакция) ---
+      const canPredict = !!me && me.alive && !me.spectator && s.phase !== "results";
+      if (canPredict && predRef.current.init) {
+        const inp = readInput();
+        const r = stepPlayer(predRef.current.x, predRef.current.y, inp.mx, inp.my, dt, obstaclesRef.current);
+        predRef.current.x = r.x;
+        predRef.current.y = r.y;
+      }
+
+      // --- Локальные выстрелы: пуля рисуется мгновенно, урон считает сервер ---
+      if (canPredict && me) {
+        const inp = readInput();
+        cooldownRef.current -= dt;
+        if (inp.shoot && cooldownRef.current <= 0) {
+          const spec = WEAPONS[weaponRef.current];
+          cooldownRef.current = spec.cooldown;
+          for (let i = 0; i < spec.pellets; i++) {
+            const a = inp.aim + (Math.random() * 2 - 1) * spec.spread;
+            const off = PLAYER_RADIUS + BULLET_RADIUS + 4;
+            localBulletsRef.current.push({
+              id: localIdRef.current++,
+              color: me.color,
+              x: predRef.current.x + Math.cos(a) * off,
+              y: predRef.current.y + Math.sin(a) * off,
+              vx: Math.cos(a) * spec.bulletSpeed,
+              vy: Math.sin(a) * spec.bulletSpeed,
+              life: spec.bulletLife,
+            });
+          }
+        }
+      }
+      // Симуляция локальных пуль: движение, время жизни, препятствия
+      {
+        const kept: LocalBullet[] = [];
+        for (const b of localBulletsRef.current) {
+          b.life -= dt;
+          if (b.life <= 0) continue;
+          const nx = b.x + b.vx * dt;
+          const ny = b.y + b.vy * dt;
+          if (nx < 0 || ny < 0 || nx > WORLD_SIZE || ny > WORLD_SIZE) continue;
+          let blocked = false;
+          for (const o of obstaclesRef.current) {
+            if (o.kind === "bush") continue;
+            if (segHitsCircle(b.x, b.y, nx, ny, o.x, o.y, o.r)) {
+              blocked = true;
+              break;
+            }
+          }
+          if (blocked) continue;
+          b.x = nx;
+          b.y = ny;
+          kept.push(b);
+        }
+        localBulletsRef.current = kept;
+      }
+
+      // --- Интерполяция снапшотов (20 Гц) для чужих игроков, пуль и зоны ---
+      const alpha = Math.max(0, Math.min(1.15, (now - recvTimeRef.current) / INTERP_MS));
+      const prevS = prevSnapRef.current;
+      const prevOk = prevS && prevS.phase === s.phase ? prevS : null;
+      const prevPlayers = prevOk ? new Map(prevOk.players.map((p) => [p.id, p] as const)) : null;
+      const prevBullets = prevOk ? new Map(prevOk.bullets.map((b) => [b.id, b] as const)) : null;
+      const pz = prevOk ? prevOk.zone : null;
+
+      const renderPlayers = s.players.map((p) => {
+        if (p.id === meIdRef.current && predRef.current.init && p.alive && !p.spectator) {
+          return { ...p, x: predRef.current.x, y: predRef.current.y, angle: readInput().aim };
+        }
+        const pp = prevPlayers?.get(p.id);
+        if (!pp || pp.alive !== p.alive || Math.hypot(p.x - pp.x, p.y - pp.y) > 180) return p;
+        return {
+          ...p,
+          x: lerp(pp.x, p.x, alpha),
+          y: lerp(pp.y, p.y, alpha),
+          angle: lerpAngle(pp.angle, p.angle, alpha),
+          hp: lerp(pp.hp, p.hp, alpha),
+        };
+      });
+      const renderBullets = s.bullets
+        .filter((b) => b.ownerId !== meIdRef.current)
+        .map((b) => {
+          const pb = prevBullets?.get(b.id);
+          if (!pb) return b;
+          return { ...b, x: lerp(pb.x, b.x, alpha), y: lerp(pb.y, b.y, alpha) };
+        });
+      const renderZone = pz
+        ? {
+            ...s.zone,
+            x: lerp(pz.x, s.zone.x, alpha),
+            y: lerp(pz.y, s.zone.y, alpha),
+            r: lerp(pz.r, s.zone.r, alpha),
+          }
+        : s.zone;
+
+      // --- Камера плавно следует за своим персонажем / зоной ---
+      const rme = renderPlayers.find((p) => p.id === meIdRef.current) ?? null;
+      const tx = rme ? rme.x : renderZone.x;
+      const ty = rme ? rme.y : renderZone.y;
+      if (!camRef.current.init && me) {
+        camRef.current.x = tx;
+        camRef.current.y = ty;
+        camRef.current.init = true;
+      }
+      const ck = 1 - Math.exp(-18 * dt);
+      camRef.current.x += (tx - camRef.current.x) * ck;
+      camRef.current.y += (ty - camRef.current.y) * ck;
+      const camX = camRef.current.x;
+      const camY = camRef.current.y;
       const ox = w / 2 - camX;
       const oy = h / 2 - camY;
       const inView = (x: number, y: number, r: number) =>
@@ -346,18 +606,18 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
       }
 
       // Зона (шторм) — заливка с дыркой по evenodd
-      const zx = s.zone.x + ox;
-      const zy = s.zone.y + oy;
+      const zx = renderZone.x + ox;
+      const zy = renderZone.y + oy;
       ctx.fillStyle = "rgba(167,139,250,0.30)";
       ctx.beginPath();
       ctx.rect(0, 0, w, h);
-      ctx.arc(zx, zy, Math.max(0, s.zone.r), 0, Math.PI * 2);
+      ctx.arc(zx, zy, Math.max(0, renderZone.r), 0, Math.PI * 2);
       ctx.fill("evenodd");
       ctx.strokeStyle = "#8B5CF6";
       ctx.lineWidth = 4;
       ctx.setLineDash([14, 10]);
       ctx.beginPath();
-      ctx.arc(zx, zy, Math.max(0, s.zone.r), 0, Math.PI * 2);
+      ctx.arc(zx, zy, Math.max(0, renderZone.r), 0, Math.PI * 2);
       ctx.stroke();
       if (s.zone.shrinking) {
         ctx.strokeStyle = "rgba(139,92,246,0.55)";
@@ -369,8 +629,9 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
       }
       ctx.setLineDash([]);
 
-      // Пули
-      for (const b of s.bullets) {
+      // Пули: чужие с сервера (с интерполяцией) + свои локальные (мгновенные)
+      const allBullets = [...renderBullets, ...localBulletsRef.current];
+      for (const b of allBullets) {
         if (!inView(b.x, b.y, 20)) continue;
         ctx.strokeStyle = b.color;
         ctx.globalAlpha = 0.45;
@@ -391,7 +652,7 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
 
       // Игроки
       ctx.textAlign = "center";
-      for (const p of s.players) {
+      for (const p of renderPlayers) {
         if (p.spectator || !p.alive) continue;
         if (!inView(p.x, p.y, 70)) continue;
         const x = p.x + ox;

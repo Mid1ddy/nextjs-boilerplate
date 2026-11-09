@@ -126,6 +126,7 @@ export interface PlayerState {
   spectator: boolean;
   kills: number;
   place: number; // 0 = ещё играет / не участвует
+  seq: number; // номер последнего применённого пакета ввода
 }
 
 export interface BulletState {
@@ -200,4 +201,5 @@ export interface InputPayload {
   my: number; // -1..1
   aim: number; // угол прицела в радианах
   shoot: boolean;
+  seq?: number; // номер пакета для клиентской реконсиляции
 }
