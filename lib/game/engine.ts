@@ -29,6 +29,9 @@ import {
   ZoneState,
 } from "./shared";
 
+/** Линейная интерполяция — используется при сжатии шторма */
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
 interface InternalPlayer {
   id: string;
   name: string;

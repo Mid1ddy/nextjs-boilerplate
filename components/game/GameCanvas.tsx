@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Trophy } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { createGameSocket } from "@/lib/game/socket";
 import type { Socket } from "socket.io-client";
 import {
@@ -31,7 +30,6 @@ interface Stick {
 
 const STICK_MAX = 56;
 const newStick = (): Stick => ({ active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 });
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 function hpColor(pct: number): string {
   if (pct > 50) return "#6EE7A0";
@@ -530,53 +528,56 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
     <div className="fixed inset-0 select-none overflow-hidden bg-[#FDF3E3]">
       <canvas ref={canvasRef} className="absolute inset-0 touch-none cursor-none" />
 
-      {/* Верх слева: статус раунда */}
-      <div className="absolute top-3 left-3 flex flex-col gap-2 items-start">
-        <div className="flex gap-2">
-          <Chip>Живых: {snap ? snap.aliveCount : "—"}</Chip>
-          {me && !me.alive && me.place > 0 && <Chip>Место #{me.place}</Chip>}
+      {/* Верх слева: живые/место и сводка */}
+      <div className="absolute top-3 left-4 text-white font-bold text-sm" style={HUD_SHADOW}>
+        <div>
+          Живых: {snap ? snap.aliveCount : "—"}
+          {me && !me.alive && me.place > 0 ? ` · Место #${me.place}` : ""}
         </div>
-        <Chip className="bg-white/70">
+        <div className="text-white/85">
           {meName} · {me ? WEAPONS[me.weapon].name : "..."} · Убийств: {me ? me.kills : "—"}
-        </Chip>
+        </div>
       </div>
 
-      {/* Верх центр: фаза */}
-      <div className="absolute top-[88px] sm:top-3 left-1/2 -translate-x-1/2 w-full sm:w-auto px-2 sm:px-0 text-center">
+      {/* Верх центр: фаза раунда */}
+      <div
+        className="absolute top-16 sm:top-3 left-1/2 -translate-x-1/2 w-full sm:w-auto px-4 sm:px-0 text-center text-white font-bold text-sm pointer-events-none"
+        style={HUD_SHADOW}
+      >
         {snap?.phase === "playing" && (
-          <Chip className={snap.zone.shrinking ? "bg-violet-200" : "bg-white/85"}>
+          <div className={snap.zone.shrinking ? "text-violet-200" : "text-white/90"}>
             {snap.zone.shrinking ? "ЗОНА СУЖАЕТСЯ!" : `Шторм через ${snap.phaseTime}с`} · {snap.zone.dps} урон/с
-          </Chip>
+          </div>
         )}
         {snap?.phase === "lobby" && (
-          <Chip>
+          <div className="text-white/90">
             Разминка · игроков {snap.playersInLobby}/{LOBBY_MIN_PLAYERS} — ждём соперника
-          </Chip>
+          </div>
         )}
-        {snap?.phase === "countdown" && <Chip className="bg-amber-200">Раунд через {snap.phaseTime}с</Chip>}
-        {snap?.phase === "results" && <Chip className="bg-violet-200">Раунд завершён</Chip>}
+        {snap?.phase === "countdown" && <div className="text-amber-200">Раунд через {snap.phaseTime}с</div>}
+        {snap?.phase === "results" && <div className="text-violet-200">Раунд завершён</div>}
         {status !== "online" && (
-          <Chip className="bg-red-200 mt-2">
+          <div className="mt-1 text-amber-300">
             {status === "connecting" ? "Подключение..." : "Переподключение..."}
-          </Chip>
+          </div>
         )}
       </div>
 
       {/* Правый верх: килл-фид */}
-      <div className="absolute top-3 right-3 flex flex-col gap-1 items-end max-w-[280px]">
+      <div
+        className="absolute top-3 right-4 flex flex-col items-end gap-1 max-w-[300px] pointer-events-none"
+        style={HUD_SHADOW}
+      >
         {feed.map((f) => (
-          <div
-            key={f.id}
-            className="text-xs font-semibold bg-white/80 border-2 border-stone-300 rounded-lg px-2 py-1 text-stone-700"
-          >
+          <div key={f.id} className="text-xs font-semibold text-white/95">
             {f.kind === "kill" ? (
               <>
-                <b className={f.killer === "Зона" ? "text-violet-600" : "text-rose-500"}>{f.killer}</b>{" "}
-                выбил <b>{f.victim}</b> <span className="text-stone-400">({f.weapon})</span>
+                <b className={f.killer === "Зона" ? "text-violet-200" : "text-rose-200"}>{f.killer}</b>{" "}
+                выбил <b>{f.victim}</b> <span className="text-white/60">({f.weapon})</span>
               </>
             ) : (
               <>
-                <b>{f.victim}</b> подобрал <span className="text-amber-600">{f.weapon}</span>
+                <b>{f.victim}</b> подобрал <span className="text-amber-200">{f.weapon}</span>
               </>
             )}
           </div>
@@ -586,81 +587,79 @@ export default function GameCanvas({ name, onExit, onStatsChanged }: Props) {
       {/* Центральные оверлеи */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         {snap?.phase === "countdown" && (
-          <div className="text-stone-800 font-extrabold text-[110px] leading-none drop-shadow-[3px_3px_0_rgba(255,255,255,0.9)] animate-pulse">
+          <div
+            className="text-white font-extrabold text-[110px] leading-none animate-pulse"
+            style={{ textShadow: "0 4px 14px rgba(0,0,0,0.5)" }}
+          >
             {snap.phaseTime}
           </div>
         )}
-        {snap?.phase === "playing" && me && !me.alive && (
-          <CenterCard>
-            <div className="text-3xl font-extrabold text-stone-800">Ты выбыл</div>
-            <div className="mt-2 text-stone-600 font-semibold">
+        {snap?.phase === "playing" && me && !me.alive && !me.spectator && (
+          <DarkPanel>
+            <div className="text-3xl font-extrabold">Ты выбыл</div>
+            <div className="mt-2 font-semibold text-white/75">
               Место #{me.place} · наблюдаем до конца раунда
             </div>
-          </CenterCard>
+          </DarkPanel>
         )}
         {snap?.phase === "playing" && me && me.spectator && (
-          <CenterCard>
-            <div className="text-2xl font-extrabold text-stone-800">Режим наблюдателя</div>
-            <div className="mt-2 text-stone-600 font-semibold">
+          <DarkPanel>
+            <div className="text-2xl font-extrabold">Режим наблюдателя</div>
+            <div className="mt-2 font-semibold text-white/75">
               Раунд уже идёт — в следующий попадёшь сразу
             </div>
-          </CenterCard>
+          </DarkPanel>
         )}
         {snap?.phase === "results" && (
-          <CenterCard className="min-w-[300px]">
-            <div className="text-3xl font-extrabold text-stone-800">
+          <DarkPanel className="min-w-[300px]">
+            <div className="text-3xl font-extrabold">
               {snap.winner ? `Победил ${snap.winner}!` : "Ничья"}
             </div>
             <div className="mt-3 flex flex-col gap-1">
               {snap.results.slice(0, 5).map((r, i) => (
-                <div key={r.name + i} className="flex justify-between gap-6 text-sm font-semibold text-stone-700">
+                <div key={r.name + i} className="flex justify-between gap-6 text-sm font-semibold text-white/85">
                   <span>
                     {i + 1}. {r.name}
-                    {r.win && <Trophy className="inline w-3.5 h-3.5 ml-1 mb-0.5 text-amber-500" />}
+                    {r.win && <Trophy className="inline w-3.5 h-3.5 ml-1 mb-0.5 text-amber-400" />}
                   </span>
                   <span>убийств: {r.kills}</span>
                 </div>
               ))}
             </div>
-            <div className="mt-3 text-stone-500 text-sm font-semibold">
+            <div className="mt-3 text-sm font-semibold text-white/60">
               Новый раунд через {snap.phaseTime}с
             </div>
-          </CenterCard>
+          </DarkPanel>
         )}
       </div>
 
       {/* Низ слева: выход */}
-      <div className="absolute bottom-4 left-4">
-        <Button
-          onClick={onExit}
-          className="border-[3px] border-stone-800 rounded-2xl bg-white/90 text-stone-800 font-bold hover:bg-white shadow-[3px_3px_0_0_#292524]"
-        >
-          В меню
-        </Button>
-      </div>
+      <button
+        onClick={onExit}
+        className="absolute bottom-4 left-4 rounded-full bg-stone-950/50 hover:bg-stone-950/70 text-white text-sm font-bold px-5 py-2 backdrop-blur-sm transition-colors"
+      >
+        В меню
+      </button>
 
       {/* Низ справа: подсказка */}
-      <div className="absolute bottom-4 right-4 hidden sm:block text-xs font-semibold text-stone-600 bg-white/70 rounded-lg px-2 py-1">
+      <div
+        className="absolute bottom-4 right-4 hidden sm:block text-xs font-semibold text-white/80"
+        style={HUD_SHADOW}
+      >
         WASD + мышь · на телефоне: два стика
       </div>
     </div>
   );
 }
 
-function Chip({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span
-      className={`inline-block bg-white/85 border-[3px] border-stone-800 rounded-full px-3 py-1 text-sm font-bold text-stone-800 shadow-[3px_3px_0_0_#292524] ${className}`}
-    >
-      {children}
-    </span>
-  );
-}
+const HUD_SHADOW: React.CSSProperties = {
+  textShadow: "0 1px 3px rgba(0,0,0,0.65), 0 0 7px rgba(0,0,0,0.3)",
+};
 
-function CenterCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function DarkPanel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <div
-      className={`bg-white/90 border-[3px] border-stone-800 rounded-3xl px-8 py-6 text-center shadow-[6px_6px_0_0_#292524] ${className}`}
+      className={`bg-stone-950/70 backdrop-blur-md text-white rounded-2xl px-8 py-6 text-center shadow-2xl ${className}`}
     >
       {children}
     </div>
